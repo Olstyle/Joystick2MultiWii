@@ -23,29 +23,28 @@
 static int16_t rcData[8];          // interval [1000;2000]
 
 int serial;
-FILE* serialFile;
 
 static SDL_Joystick *js;
 static void Joystick_Info (void) 
 {
   int num_js, i;
   num_js = SDL_NumJoysticks ();
-  printf ("Es wurde(n) %d Joystick(s) auf dem System gefunden\n",
+  printf ("Found %d Joystick(s)!\n",
      num_js);
   if (num_js == 0) {
-    printf ("Es wurde kein Joystick gefunden\n");
+    printf ("Could find a Joystick!\n");
     return;
   }
   /* Informationen zum Joystick */
   for (i = 0; i < num_js; i++) {
     js = SDL_JoystickOpen (i);
     if (js == NULL) {
-      printf ("Kann Joystick %d nicht öffnen\n", i);
+      printf ("Cant open Joystick %d !\n", i);
     } 
     else {
       printf ("Joystick %d\n", i);
       printf ("\tName:       %s\n", SDL_JoystickName(i));
-      printf ("\tAxen:       %i\n", SDL_JoystickNumAxes(js));
+      printf ("\tAxis:       %i\n", SDL_JoystickNumAxes(js));
       printf ("\tTrackballs: %i\n", SDL_JoystickNumBalls(js));
       printf ("\tButtons:   %i\n",SDL_JoystickNumButtons(js));
       printf ("\tHats: %i\n",SDL_JoystickNumHats(js)); 
@@ -104,15 +103,15 @@ static int eventloop_joystick (void)
 		case SDL_KEYDOWN:
 			if (event.key.keysym.sym == SDLK_ESCAPE)
 			{
-				printf ("ESCAPE für Ende betätigt\n");
+				printf ("Hit ESCAPE to exit\n");
 				return 0;
 			}
 			break;
 		case SDL_JOYAXISMOTION:
-			//lokal
-			printf ("Joystick %d, Achse %d bewegt nach %d\n",
-			 event.jaxis.which, event.jaxis.axis, event.jaxis.value);
-			 //über serielle Verbindung
+			//local
+			//~ printf ("Joystick %d, Axis %d moved to %d\n",
+			 //~ event.jaxis.which, event.jaxis.axis, event.jaxis.value);
+			 //prepare for serial output
 			 readAxis(&event);
 			 return 2;
 		  break;
@@ -140,70 +139,85 @@ void sendRC()
 	checksum^=200;
 	
 	uint8_t i;
+	uint8_t z;
 	uint8_t outputbuffer[22];
-	//Header
+	//header
 	outputbuffer[0]='$';
 	outputbuffer[1]='M';
 	outputbuffer[2]='<';
-	//Size
+	//size
 	outputbuffer[3]=16;
-	//Message type
+	//message type
 	outputbuffer[4]=200;
 	
+	z=0;
 	for(i=5; i<21 ; i++)
 	{
 		//low byte
-		outputbuffer[i]=(uint8_t)rcData[i]&0xFF;
+		outputbuffer[i]=(uint8_t)(rcData[z]&0xFF);
 		checksum^=outputbuffer[i];
 		i++;
 		//high byte
-		outputbuffer[i]=(uint8_t)(rcData[i]>>8);
+		outputbuffer[i]=(uint8_t)(rcData[z]>>8);
 		checksum^=outputbuffer[i];
+		z++;
 	}
+	
 	outputbuffer[21]=checksum;
 	
-	fwrite(outputbuffer,sizeof(uint8_t),22,serialFile);
-	fprintf(serialFile, "\n");
-	tcflush(serial, TCIFLUSH);
-	/*fprintf(serialFile,"$M< 16 200 %i %i %i %i %i %i %i %i %i \n",
-		rcData[0], rcData[1], rcData[2], rcData[3], rcData[4], rcData[5], rcData[6], rcData[7], checksum);*/
+	//~ //for debug use
+	//~ printf("send: ");
+	//~ int j;
+	//~ for(j=0;j<22;j++)
+	//~ {
+		//~ printf("%d-",outputbuffer[j]);
+	//~ }
+	//~ printf("\n rc= ");
+	//~ for(j=0;j<9;j++)
+	//~ {
+		//~ printf("%d-",rcData[j]);
+	//~ }
+	//~ printf("\n");
+	
+	write(serial,outputbuffer,22);
+	//wait for serialport to send
+	tcdrain(serial);
 }
 
 
 int main (void) 
 {
-	//vorfüllen mit Mittelstellung
+	//prefill with middle position
 	uint8_t i;
 	for(i=0; i<8 ; i++)
 	{
 		rcData[i]=1500;
 	}
-	//seriellen Bluetooth Anschluss als Datei öffnen
-	serialFile = fopen(SERIAL, "a");
+	//open serialport
 	serial = open ( SERIAL , O_RDWR | O_NOCTTY | O_NDELAY );
 	
 	struct termios options;
 
-    //aktuelle Porteinstellungen auslesen
-    tcgetattr(serial, &options);
-    //baud rate setzen
-    cfsetispeed(&options, BAUD);
-    cfsetospeed(&options, BAUD);
-    // Enable the receiver and set local mode...
-    options.c_cflag |= (CLOCAL | CREAD);
-    //8N1 "keine Parität"
-    options.c_cflag &= ~PARENB;
-	options.c_cflag &= ~CSTOPB;
-	options.c_cflag &= ~CSIZE;
-	options.c_cflag |= CS8;
-	//Empfang erlauben
+    //read current settings
+	tcgetattr(serial, &options);
+	//raw mode -> turn all the special features off
+	//+ use 8N1
+	cfmakeraw(&options);
+	//set baudrate
+	cfsetispeed(&options, BAUD);
+	cfsetospeed(&options, BAUD);
+	//enable receiving
 	options.c_cflag |=CREAD;
-	//keine Flusssteuerung
+	//minimum number of chars to read
+	options.c_cc[VMIN]=22;
+	//timeout reading
+	options.c_cc[VTIME]=2;
+	//no flowcontrol
 	#ifdef CNEW_RTSCTS
 		options.c_cflag &= ~CNEW_RTSCTS;
 	#endif
-    //Optionen schreiben
-    tcsetattr(serial, TCSANOW, &options);
+	//write options
+	tcsetattr(serial, TCSANOW, &options);
     
     
     
@@ -211,14 +225,15 @@ int main (void)
 	if (SDL_Init (SDL_INIT_JOYSTICK | SDL_INIT_VIDEO) != 0)
 	{
 		printf ("Fehler: %s\n", SDL_GetError ());
-		return 1;
+		return EXIT_FAILURE;
 	}
 	atexit (SDL_Quit);
 	Joystick_Info ();
 	js = SDL_JoystickOpen (JOYSTICK_N);
 	if (js == NULL) 
 	{
-		printf("Konnte Joystick nicht öffnen:%s\n",SDL_GetError());
+		printf("Couldn't open desired Joystick:%s\n",SDL_GetError());
+		done=0;
 	}
 	
 	int res;
@@ -228,26 +243,26 @@ int main (void)
 		done = eventloop_joystick ();
 		if(done>1)
 			sendRC();
-			
+		
+		
 		res = read(serial,buf,255);
-		if(res!=0)
+		if(res>0)
 		{
 			
 			for(i=0;i<res;i++)
-			{
-				if(i<3)
 					printf("%c",buf[i]);
-				else
-					printf("%u|",buf[i]);
-			}
+			
 			printf("\n");
-		}	
+			
+			for(i=0;i<res;i++)
+					printf("%u|",buf[i]);
+					
+			printf("\n");
+		}
 		
 	}
 	  
   SDL_JoystickClose (js);
-  //"Datei" des seriellenPorts schließen
-  fclose(serialFile);
   close (serial);
   return EXIT_SUCCESS;
 }
