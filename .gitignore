@@ -6,7 +6,6 @@ JS2Serial
 JSBluetooth1*
 jsbsp
 sdl9.c
-*.pdf
 .fuse*
 
 #################
